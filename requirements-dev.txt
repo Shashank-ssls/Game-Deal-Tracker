@@ -1,0 +1,6 @@
+# Developer tooling (linting + type checking). Not needed to run the tracker.
+-r requirements.txt
+ruff==0.6.9
+mypy==1.11.2
+types-requests==2.32.0.20240914
+types-PyYAML==6.0.12.20240917

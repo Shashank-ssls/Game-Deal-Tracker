@@ -1,0 +1,21 @@
+[
+  {
+    "id": "itad-verify-1",
+    "deals": [
+      {
+        "shop": {"id": 61, "name": "Steam"},
+        "price": {"amount": 449.0, "currency": "INR"},
+        "regular": {"amount": 1799.0, "currency": "INR"},
+        "cut": 75,
+        "url": "https://store.steampowered.com/app/111111"
+      },
+      {
+        "shop": {"id": 35, "name": "GOG"},
+        "price": {"amount": 399.0, "currency": "INR"},
+        "regular": {"amount": 1799.0, "currency": "INR"},
+        "cut": 78,
+        "url": "https://gog.com/game/heavy-discount"
+      }
+    ]
+  }
+]

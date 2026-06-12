@@ -1,0 +1,54 @@
+# Daily Game Deal Tracker run.
+#
+# Persistence note (best-effort): the SQLite dedup database (data/tracker.db) is
+# carried between runs via actions/cache. GitHub may evict a cache at any time;
+# if that happens the WORST case is that a still-active deal is reported one extra
+# time after the miss. No deal is ever lost and nothing breaks — dedup simply
+# starts fresh. Secrets come from this repository's Actions secrets and are masked
+# automatically in the logs.
+
+name: daily
+
+on:
+  schedule:
+    - cron: "30 3 * * *"   # 03:30 UTC ~= 09:00 IST
+  workflow_dispatch: {}     # allow manual runs from the Actions tab
+
+permissions:
+  contents: read
+
+concurrency:
+  group: daily-run
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      # Restore the dedup DB from the most recent prior run (prefix fallback),
+      # and save a fresh entry at job end (the unique run_id keeps keys distinct).
+      - name: Restore deal database
+        uses: actions/cache@v4
+        with:
+          path: data
+          key: tracker-db-${{ github.ref_name }}-${{ github.run_id }}
+          restore-keys: |
+            tracker-db-${{ github.ref_name }}-
+
+      - name: Run tracker
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          ITAD_API_KEY: ${{ secrets.ITAD_API_KEY }}
+          STEAM_ID64: ${{ secrets.STEAM_ID64 }}
+          STEAM_API_KEY: ${{ secrets.STEAM_API_KEY }}
+        run: python -m src.main

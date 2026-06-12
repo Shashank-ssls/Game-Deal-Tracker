@@ -1,0 +1,35 @@
+[
+  {
+    "title": "Heavy Discount Game",
+    "dealID": "DEAL75",
+    "storeID": "1",
+    "gameID": "111",
+    "salePrice": "4.99",
+    "normalPrice": "19.99",
+    "savings": "75.0375",
+    "steamAppID": "111111",
+    "thumb": "https://img/csheavy.jpg"
+  },
+  {
+    "title": "Massive Discount Game",
+    "dealID": "DEAL80",
+    "storeID": "7",
+    "gameID": "222",
+    "salePrice": "2.00",
+    "normalPrice": "10.00",
+    "savings": "80.0",
+    "steamAppID": "222222",
+    "thumb": "https://img/csmassive.jpg"
+  },
+  {
+    "title": "Weak Discount Game",
+    "dealID": "DEAL50",
+    "storeID": "1",
+    "gameID": "333",
+    "salePrice": "5.00",
+    "normalPrice": "10.00",
+    "savings": "50.0",
+    "steamAppID": "333333",
+    "thumb": "https://img/csweak.jpg"
+  }
+]

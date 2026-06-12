@@ -1,0 +1,112 @@
+# Game Deal Tracker — non-secret settings template.
+# Copy this file to "config.yaml" (gitignored) to override any default below.
+# Secrets do NOT go here — they live in .env. See .env.example.
+
+region: IN              # Store region for prices/availability.
+currency: INR           # Display currency.
+min_discount_pct: 70    # Discount threshold for the deals section.
+dedup_expiry_days: 30   # Forget seen deals older than this many days.
+ratings_cache_days: 7   # Re-fetch review scores after this many days.
+wishlist_mention: ""    # e.g. "@everyone" or a role mention for wishlist hits.
+max_deals_per_run: 30   # Cap per run to respect API + Discord limits.
+
+# Quality / preferred-publisher settings.
+# Games whose developer OR publisher matches any name below are pulled into a pinned
+# "Quality picks" section. Match is word-boundary, case-insensitive, against publisher
+# AND developer. Mix AAA publishers with award-winning AA/indie studios — edit freely.
+preferred_publishers:
+  - Capcom
+  - FromSoftware
+  - Square Enix
+  - Electronic Arts
+  - 2K
+  - Bethesda
+  - CD Projekt
+  - Larian Studios       # Baldur's Gate 3 (GOTY)
+  - Supergiant Games     # Hades (GOTY)
+  - ZA/UM                # Disco Elysium
+  - Team Cherry          # Hollow Knight
+  - Devolver Digital     # publisher of many award indies
+min_review_pct: 0       # 0 = off. Drops discount deals below this Steam positive-% (when known).
+min_metacritic: 0       # 0 = off. Drops discount deals below this Metacritic (only when a score exists).
+preferred_mention: ""   # e.g. "@everyone" or a role mention, on the Quality picks section only.
+
+# "Premium pick" badge: a pricey game now cheap. Flagged when the original price is
+# above premium_original_min AND the sale price is at or below premium_sale_max.
+premium_original_min: 1000   # original price must exceed this (INR)
+premium_sale_max: 500        # ...and sale price be at or below this (INR)
+
+# Trust gate: ignore the review % unless it's backed by at least this many reviews
+# (0 = off). Stops "95% from 12 reviews" passing the quality gate.
+min_review_count: 0
+
+# Wide-net discovery: sources fetch deals down to this %, but a sub-threshold deal
+# is only kept if it's a premium pick, preferred publisher, or wishlist hit — so a
+# pricey game at 60% off still surfaces without flooding the feed.
+discovery_discount_pct: 50
+
+# Content filters.
+exclude_early_access: false  # drop Early Access / unreleased games
+exclude_genres: []           # e.g. ["Sexual Content", "Nudity", "Gore"]
+# Positive genre filter (allowlist). When non-empty, only deals whose genres include
+# at least one of these survive; deals with unknown genres are kept. Exclude wins.
+include_genres: []           # e.g. ["RPG", "Action", "Strategy"]
+
+# Franchise watch: any discovered deal whose title contains one of these names is
+# promoted into the Quality picks section (exempt from the quality gate), even below
+# min_discount_pct. Unlike watchlist, it's passive — it only flags deals already found.
+franchises: []               # e.g. ["Resident Evil", "Dark Souls", "Final Fantasy"]
+
+# Re-notify a deal once when it's within this many hours of ending (0 = off).
+ending_soon_hours: 48
+
+# Best-effort: search Steam by title to attach an appid to non-Steam deals so they
+# also get ratings + publisher classification (costs extra HTTP). Off by default.
+resolve_steam_appids: false
+
+# Local Steam appid index: download Steam's games list once and cache it, so non-Steam
+# titles resolve offline/instantly (falling back to the online search on any ambiguity).
+# Speeds up resolve_steam_appids and the watchlist. Off by default.
+# Requires a free STEAM_API_KEY in .env (https://steamcommunity.com/dev/apikey); without
+# it the index is silently skipped and the online search is used.
+use_appid_index: false
+appindex_cache_days: 7       # refresh the cached app list after this many days
+
+# Auto-derive watchlist titles from your preferred_publishers' notable games (via
+# SteamSpy's most-owned list), price-checked like the manual watchlist. So setting
+# "Capcom" as preferred surfaces Resident Evil / Monster Hunter without naming them.
+# Each derived title costs one throttled Steam price-check per run — keep the cap modest.
+derive_watchlist: false
+catalogue_cache_days: 7      # refresh the derived list after this many days
+max_derived_titles: 40       # cap on auto-added titles
+
+# All-store historical low: flag 🔥 only when a deal is at/below the lowest price it
+# has EVER hit across all stores (ITAD), not just the one store. Adds one batched
+# ITAD call per run; refines ITAD-native deals. Off by default.
+all_store_low: false
+
+# Price-trend: flag 📉 "Cheaper than before" when a deal undercuts its lowest price
+# seen in the last N days. Prices are recorded locally each run, so the signal needs
+# a few days of history to warm up. 0 = off.
+price_drop_window_days: 0
+
+# Which sections to post (remove any you don't want), and an optional cap on the
+# discount section only (0 = unlimited). Free/wishlist/preferred are never capped.
+sections: [free, wishlist, preferred, discounts]
+max_discounts_per_run: 0
+
+# AAA watchlist: specific game titles price-checked every run via Steam. They appear
+# in the Quality picks section the moment they're discounted at ANY %, regardless of
+# the discount-sorted source feed. Best way to reliably catch big-name games on sale.
+watchlist:
+  - ELDEN RING
+  - Resident Evil 4
+  - Cyberpunk 2077
+
+# Store selection (case-insensitive substring match on the store name).
+# stores = allowlist: only show deals from these (empty = every store).
+# exclude_stores = blocklist: hide these stores.
+# Common names: Steam, GOG, Epic, Fanatical, GameBillet, Humble, GreenManGaming,
+# Microsoft Store, WinGameStore. ("Epic" matches both "Epic Games" and "Epic Game Store".)
+stores: []            # e.g. [Steam, GOG, Epic]
+exclude_stores: []    # e.g. [Fanatical, GameBillet]

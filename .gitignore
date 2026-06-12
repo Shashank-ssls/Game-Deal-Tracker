@@ -1,0 +1,35 @@
+# Secrets and local config — never commit these.
+.env
+config.yaml
+
+# Local-only working notes / docs (kept out of the public template).
+not_require/
+
+# Dev tooling caches.
+.ruff_cache/
+
+# Local database (created on first run).
+*.db
+*.db-wal
+*.db-shm
+data/
+
+# Python caches / build artifacts.
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+build/
+dist/
+*.egg-info/
+
+# Virtual environments.
+venv/
+.venv/
+env/
+
+# Editor / OS noise.
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

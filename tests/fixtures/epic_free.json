@@ -1,0 +1,88 @@
+{
+  "data": {
+    "Catalog": {
+      "searchStore": {
+        "elements": [
+          {
+            "title": "Free Game Now",
+            "id": "offer-1",
+            "productSlug": "free-game-now",
+            "keyImages": [
+              {"type": "OfferImageWide", "url": "https://img/wide.jpg"},
+              {"type": "OfferImageTall", "url": "https://img/tall.jpg"}
+            ],
+            "price": {
+              "totalPrice": {
+                "originalPrice": 99900,
+                "discountPrice": 0,
+                "currencyCode": "INR"
+              }
+            },
+            "promotions": {
+              "promotionalOffers": [
+                {
+                  "promotionalOffers": [
+                    {
+                      "startDate": "2026-06-10T15:00:00.000Z",
+                      "endDate": "2026-06-17T15:00:00.000Z",
+                      "discountSetting": {"discountPercentage": 0}
+                    }
+                  ]
+                }
+              ],
+              "upcomingPromotionalOffers": []
+            },
+            "catalogNs": {"mappings": [{"pageSlug": "free-game-now"}]}
+          },
+          {
+            "title": "Upcoming Free Game",
+            "id": "offer-2",
+            "productSlug": "upcoming-free",
+            "keyImages": [{"type": "OfferImageWide", "url": "https://img/up.jpg"}],
+            "price": {
+              "totalPrice": {"originalPrice": 49900, "discountPrice": 49900, "currencyCode": "INR"}
+            },
+            "promotions": {
+              "promotionalOffers": [],
+              "upcomingPromotionalOffers": [
+                {
+                  "promotionalOffers": [
+                    {
+                      "startDate": "2026-06-20T15:00:00.000Z",
+                      "endDate": "2026-06-27T15:00:00.000Z",
+                      "discountSetting": {"discountPercentage": 0}
+                    }
+                  ]
+                }
+              ]
+            },
+            "catalogNs": {"mappings": [{"pageSlug": "upcoming-free"}]}
+          },
+          {
+            "title": "Not Free Discounted",
+            "id": "offer-3",
+            "productSlug": "not-free",
+            "keyImages": [{"type": "OfferImageWide", "url": "https://img/nf.jpg"}],
+            "price": {
+              "totalPrice": {"originalPrice": 100000, "discountPrice": 50000, "currencyCode": "INR"}
+            },
+            "promotions": {
+              "promotionalOffers": [
+                {
+                  "promotionalOffers": [
+                    {
+                      "startDate": "2026-06-10T00:00:00.000Z",
+                      "endDate": "2026-06-17T00:00:00.000Z",
+                      "discountSetting": {"discountPercentage": 50}
+                    }
+                  ]
+                }
+              ],
+              "upcomingPromotionalOffers": []
+            }
+          }
+        ]
+      }
+    }
+  }
+}

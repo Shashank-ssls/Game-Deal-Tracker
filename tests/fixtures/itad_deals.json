@@ -1,0 +1,51 @@
+{
+  "nextOffset": 3,
+  "hasMore": false,
+  "list": [
+    {
+      "id": "itad-aaa",
+      "slug": "deep-cut-game",
+      "title": "Deep Cut Game",
+      "type": "game",
+      "assets": {"boxart": "https://img/itad-aaa.jpg"},
+      "deal": {
+        "shop": {"id": 61, "name": "Steam"},
+        "price": {"amount": 199.0, "amountInt": 19900, "currency": "INR"},
+        "regular": {"amount": 1999.0, "amountInt": 199900, "currency": "INR"},
+        "cut": 90,
+        "expiry": "2026-06-20T10:00:00Z",
+        "url": "https://store.steampowered.com/app/777"
+      }
+    },
+    {
+      "id": "itad-bbb",
+      "slug": "good-cut-game",
+      "title": "Good Cut Game",
+      "type": "game",
+      "assets": {"boxart": "https://img/itad-bbb.jpg"},
+      "deal": {
+        "shop": {"id": 35, "name": "GOG"},
+        "price": {"amount": 250.0, "amountInt": 25000, "currency": "INR"},
+        "regular": {"amount": 1000.0, "amountInt": 100000, "currency": "INR"},
+        "cut": 75,
+        "expiry": null,
+        "url": "https://gog.com/game/good-cut"
+      }
+    },
+    {
+      "id": "itad-ccc",
+      "slug": "shallow-cut-game",
+      "title": "Shallow Cut Game",
+      "type": "game",
+      "assets": {"boxart": "https://img/itad-ccc.jpg"},
+      "deal": {
+        "shop": {"id": 61, "name": "Steam"},
+        "price": {"amount": 600.0, "amountInt": 60000, "currency": "INR"},
+        "regular": {"amount": 1000.0, "amountInt": 100000, "currency": "INR"},
+        "cut": 40,
+        "expiry": null,
+        "url": "https://store.steampowered.com/app/888"
+      }
+    }
+  ]
+}

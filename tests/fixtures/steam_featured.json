@@ -1,0 +1,36 @@
+{
+  "status": 1,
+  "specials": {
+    "id": "cat_specials",
+    "name": "Specials",
+    "items": [
+      {
+        "id": 100,
+        "name": "Keepable Freebie",
+        "discount_percent": 100,
+        "original_price": 59900,
+        "final_price": 0,
+        "currency": "INR",
+        "header_image": "https://img/100.jpg"
+      },
+      {
+        "id": 200,
+        "name": "Big Sale Game",
+        "discount_percent": 80,
+        "original_price": 100000,
+        "final_price": 20000,
+        "currency": "INR",
+        "header_image": "https://img/200.jpg"
+      },
+      {
+        "id": 300,
+        "name": "Cool Game - Free Weekend",
+        "discount_percent": 0,
+        "original_price": 99900,
+        "final_price": 0,
+        "currency": "INR",
+        "header_image": "https://img/300.jpg"
+      }
+    ]
+  }
+}
