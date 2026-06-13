@@ -1,5 +1,11 @@
 # 🎮 Game Deal Tracker
 
+Game Deal Tracker is a self-hosted Python automation bot that aggregates live video-game deals from
+four storefront APIs (IsThereAnyDeal, CheapShark, Steam, Epic), verifies prices in the user's
+region/currency, classifies them by publisher/franchise/quality, de-duplicates against history, and
+posts curated alerts to Discord as rich embeds — running unattended on a daily schedule. SQLite is
+used purely for dedup and caching; secrets are env-isolated and never committed.
+
 A self-hosted Python bot that finds **free games** and **quality discounts** across multiple
 stores, checks whether they're actually worth playing (review scores, Metacritic, publisher),
 and posts them to **Discord** as rich embeds — region-locked to your country's prices and
