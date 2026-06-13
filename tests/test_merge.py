@@ -32,6 +32,18 @@ def test_cross_store_dedupe_keeps_cheapest():
     assert discounts[0].price_new == 399
 
 
+def test_cross_store_dedupe_three_stores_keeps_cheapest():
+    # The same game arrives from Steam, Epic and GOG (larger paginated feed); the
+    # cheapest INR offer wins and only one entry survives.
+    steam = _paid("Triple Game", appid=99, price=899, discount=50, store="Steam")
+    epic = _paid("Triple Game", appid=99, price=799, discount=55, store="Epic")
+    gog = _paid("Triple Game", appid=99, price=699, discount=60, store="GOG")
+    _, discounts = merge_deals([steam, epic, gog])
+    assert len(discounts) == 1
+    assert discounts[0].store == "GOG"
+    assert discounts[0].price_new == 699
+
+
 def test_free_beats_paid_for_same_game():
     paid = _paid("Hybrid Game", appid=7, price=100, discount=90)
     free = _free("Hybrid Game", appid=7)

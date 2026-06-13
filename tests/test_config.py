@@ -105,6 +105,72 @@ def test_catalogue_and_pricetrend_validation():
     )
 
 
+def test_feed_settings_defaults_and_overrides(tmp_path):
+    env, cfg = _missing(tmp_path)
+    s = Settings.load(env_path=env, config_path=cfg)
+    assert s.feed_max_deals == 800
+    assert s.feed_page_sleep == 0.5
+    assert s.publisher_metadata_batch == 100
+
+    cfg2 = tmp_path / "config.yaml"
+    cfg2.write_text(
+        "feed_max_deals: 1200\nfeed_page_sleep: 1.0\npublisher_metadata_batch: 50\n",
+        encoding="utf-8",
+    )
+    s2 = Settings.load(env_path=env, config_path=cfg2)
+    assert s2.feed_max_deals == 1200
+    assert s2.feed_page_sleep == 1.0
+    assert s2.publisher_metadata_batch == 50
+
+
+def test_feed_settings_validation():
+    assert any("feed_max_deals" in p for p in Settings(feed_max_deals=10).validate())
+    assert any("feed_max_deals" in p for p in Settings(feed_max_deals=6000).validate())
+    assert any("feed_page_sleep" in p for p in Settings(feed_page_sleep=6.0).validate())
+    assert any(
+        "publisher_metadata_batch" in p for p in Settings(publisher_metadata_batch=0).validate()
+    )
+
+
+def test_deprecated_keys_warn_and_still_load(tmp_path, caplog):
+    env, _ = _missing(tmp_path)
+    cfg = tmp_path / "config.yaml"
+    cfg.write_text(
+        "derive_watchlist: true\nuse_appid_index: true\nresolve_steam_appids: true\n"
+        "max_derived_titles: 99\nmin_discount_pct: 55\n",
+        encoding="utf-8",
+    )
+    with caplog.at_level("WARNING", logger="src.config"):
+        s = Settings.load(env_path=env, config_path=cfg)
+    # Config still loads (non-deprecated keys honoured).
+    assert s.min_discount_pct == 55
+    # A deprecation warning is emitted for each deprecated key present.
+    warned = caplog.text
+    assert "derive_watchlist" in warned
+    assert "use_appid_index" in warned
+    assert "resolve_steam_appids" in warned
+
+
+def test_real_config_yaml_shape_loads_cleanly(tmp_path):
+    """My real config.yaml shape (no 'discounts' section, discovery_discount_pct: 1)
+    loads without error and validates."""
+    env, _ = _missing(tmp_path)
+    cfg = tmp_path / "config.yaml"
+    cfg.write_text(
+        "sections:\n  - free\n  - wishlist\n  - preferred\n"
+        "min_discount_pct: 50\ndiscovery_discount_pct: 1\n"
+        "max_deals_per_run: 200\nderive_watchlist: true\nuse_appid_index: true\n"
+        "stores:\n  - Steam\n  - Epic\n  - GOG\n",
+        encoding="utf-8",
+    )
+    s = Settings.load(env_path=env, config_path=cfg)
+    assert s.sections == ["free", "wishlist", "preferred"]
+    assert s.discovery_discount_pct == 1
+    assert s.stores == ["Steam", "Epic", "GOG"]
+    # Only secret-related problems should remain (no schema errors from this shape).
+    assert all("must be" not in p and "unknown sections" not in p for p in s.validate())
+
+
 def test_yaml_overrides_defaults(tmp_path):
     env, _ = _missing(tmp_path)
     cfg = tmp_path / "config.yaml"

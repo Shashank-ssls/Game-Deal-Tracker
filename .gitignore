@@ -12,6 +12,7 @@ not_require/
 *.db
 *.db-wal
 *.db-shm
+*.db.bak-*
 data/
 
 # Python caches / build artifacts.

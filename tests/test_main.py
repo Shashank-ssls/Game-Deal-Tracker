@@ -47,6 +47,23 @@ def test_print_stats(tmp_path, capsys):
     assert "5" in out and "2" in out
 
 
+def test_print_stats_shows_source_counts(tmp_path, capsys):
+    db = Database(tmp_path / "t.db")
+    db.log_run(deals_found=49, deals_new=49,
+               source_counts={"itad": 500, "cheapshark": 500, "steam": 0, "epic": 2})
+    rc = print_stats(Settings(db_path=tmp_path / "t.db"))
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "itad=500" in out and "cs=500" in out and "st=0" in out and "ep=2" in out
+
+
+def test_print_stats_handles_missing_source_counts(tmp_path, capsys):
+    db = Database(tmp_path / "t.db")
+    db.log_run(deals_found=1, deals_new=1)  # legacy run with no source_counts
+    print_stats(Settings(db_path=tmp_path / "t.db"))
+    assert "-" in capsys.readouterr().out  # renders a placeholder, never crashes
+
+
 def test_print_stats_empty(tmp_path, capsys):
     Database(tmp_path / "empty.db")
     rc = print_stats(Settings(db_path=tmp_path / "empty.db"))

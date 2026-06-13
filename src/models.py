@@ -49,6 +49,11 @@ class Deal:
     # Steam linkage (enables ratings + wishlist matching).
     steam_appid: int | None = None
 
+    # Cross-source identity: the ITAD game UUID once resolved. Enables multi-store
+    # pricing and bulk publisher attachment. ITAD-native deals carry it directly;
+    # USD discovery deals gain it during INR verification.
+    itad_game_id: str | None = None
+
     # Studio / catalogue info (enables preferred matching + content filters).
     publisher: str | None = None
     developer: str | None = None

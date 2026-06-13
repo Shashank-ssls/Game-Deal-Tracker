@@ -7,34 +7,36 @@ logic and HTTP live in the source/enrich/notify modules added in later phases.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import logging
 import sys
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 
-from src.appindex import SteamAppIndex
-from src.catalogue import PublisherCatalogue
 from src.config import Settings
 from src.db import Database
+from src.enrich.publishers import PublisherTagger
 from src.enrich.ratings import RatingsEnricher
 from src.merge import merge_deals
 from src.models import Deal
 from src.notify.discord import DiscordNotifier
 from src.quality import (
+    below_price_floor,
     is_excluded,
     is_premium,
     matches_franchise,
     split_quality,
     store_allowed,
 )
-from src.resolve import SteamAppidResolver
 from src.sources.cheapshark import CheapSharkSource
 from src.sources.epic import EpicSource
 from src.sources.itad import ITADSource
 from src.sources.steam import SteamSource
 from src.watch import WatchlistChecker
 from src.wishlist import WishlistMatcher, split_wishlist_hits
+
+logger = logging.getLogger(__name__)
 
 
 def _deal_key(deal: Deal) -> str:
@@ -89,30 +91,55 @@ def check_config(settings: Settings) -> int:
     return 0
 
 
-def collect_deals(
-    settings: Settings, index: SteamAppIndex | None = None
-) -> tuple[list[Deal], list[Deal]]:
+def collect_deals(settings: Settings) -> tuple[list[Deal], list[Deal], dict[str, int]]:
     """Fetch every source, INR-verify USD discoveries, and merge into buckets.
 
-    Returns ``(free_deals, discount_deals)``. Each source swallows its own errors,
-    so one failing source never aborts the run.
+    Returns ``(free_deals, discount_deals, source_counts)``. Each source swallows its
+    own errors, so one failing source never aborts the run. Deals are identified by
+    their ITAD game id (or Steam appid when present), so no local title->appid
+    resolution runs. ``source_counts`` are the raw fetched counts per source (before
+    merge/dedup), for run observability.
     """
     itad = ITADSource(settings)
 
-    found: list[Deal] = []
-    found.extend(EpicSource(settings).fetch())
-    found.extend(SteamSource(settings).fetch())
-    found.extend(itad.fetch())
+    epic_deals = EpicSource(settings).fetch()
+    steam_deals = SteamSource(settings).fetch()
+    itad_deals = itad.fetch()
+    cheapshark_raw = CheapSharkSource(settings).fetch()
+
+    counts = {
+        "itad": len(itad_deals),
+        "cheapshark": len(cheapshark_raw),
+        "steam": len(steam_deals),
+        "epic": len(epic_deals),
+    }
+    logger.info(
+        "sources: itad=%(itad)d cheapshark=%(cheapshark)d steam=%(steam)d epic=%(epic)d", counts
+    )
+    _warn_silent_sources(settings, counts)
 
     # CheapShark is USD discovery: re-price in INR via ITAD, dropping deals that
     # fall below threshold or aren't purchasable in IN.
-    found.extend(itad.verify_inr(CheapSharkSource(settings).fetch()))
+    found = epic_deals + steam_deals + itad_deals + itad.verify_inr(cheapshark_raw)
 
     free_deals, discount_deals = merge_deals(found)
-    # Optionally resolve Steam appids for non-Steam deals so they can be enriched
-    # and classified (opt-in; no-op when disabled).
-    discount_deals = SteamAppidResolver(settings, index=index).resolve(discount_deals)
-    return free_deals, discount_deals
+    return free_deals, discount_deals, counts
+
+
+def _warn_silent_sources(settings: Settings, counts: dict[str, int]) -> None:
+    """Warn when a source expected to return data is empty while others are not.
+
+    A dead source (API change, expired key) otherwise looks identical to a quiet
+    day. The warning lands in the run's error log via the run-level handler. An
+    all-empty result (genuinely quiet, or total outage) is NOT singled out.
+    """
+    if sum(counts.values()) == 0:
+        return
+    others_have_data = any(v > 0 for v in counts.values())
+    if counts["itad"] == 0 and others_have_data:
+        logger.warning("itad returned 0 deals — possible API/key issue")
+    if settings.itad_api_key and counts["cheapshark"] == 0 and others_have_data:
+        logger.warning("cheapshark returned 0 deals — possible API/key issue")
 
 
 class _WarningCollector(logging.Handler):
@@ -149,14 +176,7 @@ def run_pipeline(settings: Settings, dry_run: bool) -> int:
 
 
 def _run(settings: Settings, dry_run: bool, db: Database, collector: _WarningCollector) -> int:
-    # Local Steam appid index (opt-in): cached once, then shared by the resolver
-    # and the watchlist so most title->appid lookups skip the online search.
-    index: SteamAppIndex | None = None
-    if settings.use_appid_index:
-        index = SteamAppIndex(settings, db)
-        index.ensure_fresh()
-
-    free_deals, discount_deals = collect_deals(settings, index=index)
+    free_deals, discount_deals, source_counts = collect_deals(settings)
 
     # Wishlist matching (optional): reclassify wishlisted discounts as wishlist
     # hits, and price-check wishlist games on sale below the threshold.
@@ -170,14 +190,16 @@ def _run(settings: Settings, dry_run: bool, db: Database, collector: _WarningCol
 
     # AAA watchlist: price-check specific games so they surface whenever on sale,
     # independent of the discount-sorted fetch pool. These are forced into the
-    # preferred (AAA) section. Optionally augmented with publisher-derived titles.
-    extra_titles: list[str] = []
-    if settings.derive_watchlist:
-        extra_titles = PublisherCatalogue(settings, db).derived_titles()
-    watch_deals = WatchlistChecker(settings, index=index).fetch_on_sale(extra_titles)
+    # preferred (AAA) section.
+    watch_deals = WatchlistChecker(settings, db).fetch_on_sale()
     watch_appids = {d.steam_appid for d in watch_deals if d.steam_appid}
-    if watch_appids:  # avoid listing a watched game twice
-        discount_deals = [d for d in discount_deals if d.steam_appid not in watch_appids]
+    watch_gids = {d.itad_game_id for d in watch_deals if d.itad_game_id}
+    if watch_appids or watch_gids:  # avoid listing a watched game twice
+        discount_deals = [
+            d for d in discount_deals
+            if (d.steam_appid is None or d.steam_appid not in watch_appids)
+            and (d.itad_game_id is None or d.itad_game_id not in watch_gids)
+        ]
 
     # Store selection (only show deals from chosen sites) — before enrichment so we
     # don't waste Steam calls on filtered-out deals.
@@ -203,6 +225,15 @@ def _run(settings: Settings, dry_run: bool, db: Database, collector: _WarningCol
             if matches_franchise(d, settings.franchises) or not is_excluded(d, settings)
         ]
 
+    # Region lock: drop any non-free deal not priced in our currency (e.g. a USD
+    # CheapShark deal whose INR verification was skipped without an ITAD key), so
+    # nothing reaches Discord with the wrong currency or against INR thresholds.
+    before_lock = len(enriched)
+    enriched = [d for d in enriched if d.is_free or d.currency == settings.currency]
+    dropped = before_lock - len(enriched)
+    if dropped:
+        logger.debug("region-lock: dropped %d non-%s priced deal(s)", dropped, settings.currency)
+
     watch_e = [d for d in enriched if d.source == "watchlist"]
     free_deals = [d for d in enriched if d.is_free]
     wishlist_deals = [d for d in enriched if d.is_wishlist and not d.is_free]
@@ -211,12 +242,32 @@ def _run(settings: Settings, dry_run: bool, db: Database, collector: _WarningCol
         if d.source != "watchlist" and not d.is_free and not d.is_wishlist
     ]
 
+    # Price floor: declutter the general feed of games that were never expensive.
+    # Free / wishlist / watchlist deals are exempt (handled in their own buckets).
+    if settings.min_original_price > 0:
+        before_floor = len(discount_deals)
+        discount_deals = [d for d in discount_deals if not below_price_floor(d, settings)]
+        floored = before_floor - len(discount_deals)
+        if floored:
+            logger.debug(
+                "price floor: dropped %d deal(s) below ₹%d", floored, settings.min_original_price
+            )
+
+    # Attach publisher/developer to live-feed deals that lack it (cache-first, then
+    # bounded ITAD info lookups) so preferred-publisher matching works on the feed.
+    discount_deals = PublisherTagger(settings, db).tag(discount_deals)
+
     # Pull preferred-publisher games into their own section; gate the rest.
     preferred_deals, discount_deals = split_quality(discount_deals, settings)
     # Merge watchlist hits into the AAA section (premium-flagged, deduped by appid).
     watch_e = [replace(d, is_premium_deal=is_premium(d, settings)) for d in watch_e]
     pref_appids = {d.steam_appid for d in preferred_deals if d.steam_appid}
-    watch_e = [d for d in watch_e if d.steam_appid not in pref_appids]
+    pref_gids = {d.itad_game_id for d in preferred_deals if d.itad_game_id}
+    watch_e = [
+        d for d in watch_e
+        if (d.steam_appid is None or d.steam_appid not in pref_appids)
+        and (d.itad_game_id is None or d.itad_game_id not in pref_gids)
+    ]
     preferred_deals = watch_e + preferred_deals
 
     # Section toggles + optional cap on the (sorted) discount list.
@@ -284,7 +335,12 @@ def _run(settings: Settings, dry_run: bool, db: Database, collector: _WarningCol
             f"{len(new_wishlist)} wishlist, {len(new_discounts)} >= {settings.min_discount_pct}%)."
         )
 
-    db.log_run(deals_found=found_total, deals_new=new_total, errors=collector.messages or None)
+    db.log_run(
+        deals_found=found_total,
+        deals_new=new_total,
+        errors=collector.messages or None,
+        source_counts=source_counts,
+    )
     return 0
 
 
@@ -325,12 +381,28 @@ def print_stats(settings: Settings, limit: int = 10) -> int:
         print("No runs recorded yet.")
         return 0
     print(f"Last {len(runs)} run(s):\n")
-    print(f"  {'started (UTC)':<28}{'found':>7}{'new':>6}  errors")
+    print(f"  {'started (UTC)':<28}{'found':>7}{'new':>6}  {'errors':>6}  sources")
     for run in runs:
         errors = json.loads(run["errors"] or "[]")
         started = run["started_at"][:19].replace("T", " ")
-        print(f"  {started:<28}{run['deals_found']:>7}{run['deals_new']:>6}  {len(errors)}")
+        sources = _format_source_counts(run.get("source_counts"))
+        print(
+            f"  {started:<28}{run['deals_found']:>7}{run['deals_new']:>6}"
+            f"  {len(errors):>6}  {sources}"
+        )
     return 0
+
+
+def _format_source_counts(raw: str | None) -> str:
+    """Render the per-run source_counts JSON as a compact 'itad=N cs=N st=N ep=N'."""
+    if not raw:
+        return "-"
+    try:
+        counts = json.loads(raw)
+    except (TypeError, ValueError):
+        return "-"
+    labels = (("itad", "itad"), ("cheapshark", "cs"), ("steam", "st"), ("epic", "ep"))
+    return " ".join(f"{short}={counts.get(key, 0)}" for key, short in labels)
 
 
 def _configure_logging(verbosity: int) -> None:
@@ -350,10 +422,8 @@ def _configure_logging(verbosity: int) -> None:
 def _force_utf8_output() -> None:
     """Ensure stdout/stderr can emit ₹, →, ≥ etc. regardless of console codepage."""
     for stream in (sys.stdout, sys.stderr):
-        try:
+        with contextlib.suppress(AttributeError, ValueError):
             stream.reconfigure(encoding="utf-8")  # type: ignore[union-attr]
-        except (AttributeError, ValueError):
-            pass
 
 
 def main(argv: list[str] | None = None) -> int:

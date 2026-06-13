@@ -166,30 +166,45 @@ def test_recent_runs_newest_first(db):
     assert runs[1]["deals_found"] == 1
 
 
-def test_app_index_replace_and_lookup(db):
-    assert db.app_index_age_days() is None
-    db.replace_app_index([(1, "doom"), (2, "doom"), (3, "eldenring")])
-    assert db.lookup_appids("eldenring") == [3]
-    assert sorted(db.lookup_appids("doom")) == [1, 2]
-    assert db.lookup_appids("missing") == []
-    assert db.app_index_age_days() is not None
+def test_log_run_persists_source_counts(db):
+    import json
+    import sqlite3
+
+    counts = {"itad": 100, "cheapshark": 60, "steam": 3, "epic": 1}
+    rid = db.log_run(deals_found=5, deals_new=2, source_counts=counts)
+    with sqlite3.connect(db.db_path) as conn:
+        row = conn.execute("SELECT source_counts FROM runs WHERE id = ?", (rid,)).fetchone()
+    assert json.loads(row[0]) == counts
 
 
-def test_app_index_replace_is_atomic_swap(db):
-    db.replace_app_index([(1, "old")])
-    db.replace_app_index([(2, "new")])
-    assert db.lookup_appids("old") == []  # previous contents gone
-    assert db.lookup_appids("new") == [2]
+def test_title_lookup_cache_roundtrip_and_ttl(db):
+    # Never looked up -> not a fresh hit.
+    assert db.cached_title_id("Elden Ring", 30) == (False, None)
+    db.upsert_title_id("Elden Ring", "g-elden")
+    assert db.cached_title_id("Elden Ring", 30) == (True, "g-elden")
+    # A zero-day TTL makes any stored row immediately stale.
+    assert db.cached_title_id("Elden Ring", 0) == (False, None)
 
 
-def test_derived_watchlist_roundtrip(db):
-    assert db.derived_watchlist_age_days() is None
-    assert db.get_derived_watchlist() == []
-    db.replace_derived_watchlist(["Resident Evil 4", "Monster Hunter", "Resident Evil 4 "])
-    assert set(db.get_derived_watchlist()) == {"Resident Evil 4", "Monster Hunter"}  # deduped
-    assert db.derived_watchlist_age_days() is not None
-    db.replace_derived_watchlist(["Street Fighter 6"])
-    assert db.get_derived_watchlist() == ["Street Fighter 6"]  # atomic swap
+def test_retired_app_index_tables_are_dropped(tmp_path):
+    import sqlite3
+
+    path = tmp_path / "legacy.db"
+    conn = sqlite3.connect(path)
+    conn.executescript(
+        "CREATE TABLE app_index (appid INTEGER PRIMARY KEY, norm TEXT);"
+        "CREATE TABLE app_index_meta (id INTEGER PRIMARY KEY, fetched_at TEXT, count INTEGER);"
+    )
+    conn.commit()
+    conn.close()
+
+    Database(path)  # opening runs the startup migration
+
+    conn = sqlite3.connect(path)
+    tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    conn.close()
+    assert "app_index" not in tables
+    assert "app_index_meta" not in tables
 
 
 def test_price_history_records_and_finds_min(db):

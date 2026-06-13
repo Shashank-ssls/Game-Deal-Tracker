@@ -5,6 +5,7 @@ from __future__ import annotations
 from src.config import Settings
 from src.models import Deal
 from src.quality import (
+    below_price_floor,
     is_excluded,
     is_preferred,
     is_premium,
@@ -192,11 +193,80 @@ def test_keep_filter_drops_subthreshold_non_premium():
 
 
 def test_is_premium_thresholds():
-    settings = Settings()  # defaults: original > 1000, sale <= 500
+    # Absolute mode = the original behaviour: original > 1000 AND sale <= 500.
+    settings = Settings(premium_mode="absolute")
     assert is_premium(_deal("Steal", price_old=2999, price_new=499), settings) is True
     assert is_premium(_deal("CheapBase", price_old=800, price_new=200), settings) is False
-    assert is_premium(_deal("StillPricey", price_old=2000, price_new=900), settings) is False
+    assert is_premium(
+        _deal("StillPricey", price_old=2000, price_new=900, discount_pct=55), settings
+    ) is False
     assert is_premium(_deal("Edge", price_old=1001, price_new=500), settings) is True
+
+
+def test_premium_modes_on_the_two_canonical_cases():
+    # ₹3999 @ 80% -> ₹800 : big cut on a pricey game, but NOT under ₹500.
+    big_cut = _deal("BigCut", price_old=3999, price_new=800, discount_pct=80)
+    # ₹1200 @ 60% -> ₹480 : now genuinely cheap (and exactly 60% off).
+    now_cheap = _deal("NowCheap", price_old=1200, price_new=480, discount_pct=60)
+
+    absolute = Settings(premium_mode="absolute", premium_min_discount_pct=60)
+    percent = Settings(premium_mode="percent", premium_min_discount_pct=60)
+    either = Settings(premium_mode="either", premium_min_discount_pct=60)
+    both = Settings(premium_mode="both", premium_min_discount_pct=60)
+
+    assert is_premium(big_cut, absolute) is False
+    assert is_premium(now_cheap, absolute) is True
+
+    assert is_premium(big_cut, percent) is True
+    assert is_premium(now_cheap, percent) is True
+
+    assert is_premium(big_cut, either) is True       # caught by percent
+    assert is_premium(now_cheap, either) is True
+
+    assert is_premium(big_cut, both) is False         # fails absolute
+    assert is_premium(now_cheap, both) is True        # satisfies both
+
+
+def test_is_premium_handles_none_prices_without_raising():
+    settings = Settings(premium_mode="either")
+    # No prices at all -> never premium, never raises.
+    no_prices = Deal(title="X", store="Steam", url="u", source="itad", source_game_id="x",
+                     currency="INR", discount_pct=90)
+    assert is_premium(no_prices, settings) is False
+    # Known discount but unknown sale price -> percent path still works off price_old.
+    no_new = _deal("NoNew", price_old=2000, price_new=None, discount_pct=80)
+    assert is_premium(no_new, settings) is True
+
+
+def test_below_price_floor():
+    settings = Settings(min_original_price=630)
+    # Paid game cheaper than the floor -> dropped.
+    assert below_price_floor(_deal("Cheap", price_old=499, price_new=199), settings) is True
+    # Exactly at the floor -> kept (strictly-less-than).
+    assert below_price_floor(_deal("Boundary", price_old=630, price_new=300), settings) is False
+    # Above the floor -> kept.
+    assert below_price_floor(_deal("Pricey", price_old=700, price_new=300), settings) is False
+    # Free game -> never dropped, even at ₹0.
+    free = Deal(title="Freebie", store="Epic", url="u", source="epic", source_game_id="f",
+                is_free=True, price_old=0.0, price_new=0.0, currency="INR")
+    assert below_price_floor(free, settings) is False
+    # Unknown original price -> kept (only filter on data we have).
+    assert below_price_floor(_deal("Unknown", price_old=None, price_new=99), settings) is False
+    # USD deal -> kept (floor is INR-only; region lock handles currency).
+    usd = Deal(title="USD", store="Steam", url="u", source="cheapshark", source_game_id="u",
+               currency="USD", price_old=5.0, price_new=2.0)
+    assert below_price_floor(usd, settings) is False
+    # Floor disabled (0) -> never drops anything.
+    assert below_price_floor(_deal("Cheap", price_old=99, price_new=10), Settings()) is False
+
+
+def test_is_premium_currency_guard():
+    settings = Settings(premium_mode="either")  # INR thresholds
+    usd = Deal(title="USD Deal", store="Steam", url="u", source="cheapshark",
+               source_game_id="u", currency="USD", price_old=40.0, price_new=6.0,
+               discount_pct=85)
+    # $6 <= 500 numerically, but it is not INR -> must NOT be premium.
+    assert is_premium(usd, settings) is False
 
 
 def test_premium_picks_sort_first_and_flagged():

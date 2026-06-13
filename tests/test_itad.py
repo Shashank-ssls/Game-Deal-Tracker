@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+from dataclasses import replace
 from pathlib import Path
 
 import responses
@@ -10,13 +12,17 @@ from src.config import Settings
 from src.models import Deal
 from src.sources.itad import (
     ITAD_DEALS_URL,
+    ITAD_LOOKUP_SHOP_URL,
     ITAD_LOOKUP_URL,
     ITAD_PRICES_URL,
     ITAD_STORELOW_URL,
+    STEAM_SHOP_ID,
     ITADSource,
+    shop_ids_for_stores,
 )
 
 FIXTURES = Path(__file__).parent / "fixtures"
+SHOP_LOOKUP_URL = ITAD_LOOKUP_SHOP_URL.format(shop_id=STEAM_SHOP_ID)
 
 
 def _fixture(name: str) -> str:
@@ -25,6 +31,32 @@ def _fixture(name: str) -> str:
 
 def _keyed() -> Settings:
     return Settings(itad_api_key="dummy_key")
+
+
+def _no_sleep(_seconds: float) -> None:
+    return None
+
+
+def _itad_page(n: int, cut: int, has_more: bool = True, start: int = 0) -> dict:
+    """Build an ITAD deals/v2 page of ``n`` game entries at a given cut."""
+    return {
+        "hasMore": has_more,
+        "list": [
+            {
+                "id": f"g{start + i}",
+                "title": f"Game {start + i}",
+                "type": "game",
+                "deal": {
+                    "shop": {"name": "Steam"},
+                    "price": {"amount": 100.0, "currency": "INR"},
+                    "regular": {"amount": 1000.0, "currency": "INR"},
+                    "cut": cut,
+                    "url": f"https://store.steampowered.com/app/{start + i}",
+                },
+            }
+            for i in range(n)
+        ],
+    }
 
 
 def _usd_deal(appid: int = 111111) -> Deal:
@@ -43,6 +75,20 @@ def _usd_deal(appid: int = 111111) -> Deal:
     )
 
 
+def test_shop_ids_for_stores_maps_known_names():
+    assert shop_ids_for_stores(["Steam", "Epic", "GOG"]) == [61, 16, 35]
+    # Longer/variant names still match by substring; empty list = no filter.
+    assert shop_ids_for_stores(["Epic Game Store", "GOG.com"]) == [16, 35]
+    assert shop_ids_for_stores([]) == []
+
+
+def test_shop_ids_for_stores_skips_unknown(caplog):
+    with caplog.at_level("WARNING", logger="src.sources.itad"):
+        ids = shop_ids_for_stores(["Steam", "Fanatical"])
+    assert ids == [61]
+    assert "Fanatical" in caplog.text
+
+
 @responses.activate
 def test_fetch_filters_below_threshold():
     responses.add(responses.GET, ITAD_DEALS_URL, body=_fixture("itad_deals.json"),
@@ -59,6 +105,54 @@ def test_fetch_filters_below_threshold():
 
 def test_fetch_without_key_returns_empty():
     assert ITADSource(Settings(itad_api_key=None)).fetch() == []
+
+
+@responses.activate
+def test_fetch_paginates_with_shops_param_and_feed_cap():
+    # Two full pages; feed_max_deals caps the run mid-way (the cut-stop never fires
+    # because discovery_discount_pct=1, mirroring the real config).
+    responses.add(responses.GET, ITAD_DEALS_URL, json=_itad_page(200, cut=50, start=0))
+    responses.add(responses.GET, ITAD_DEALS_URL, json=_itad_page(200, cut=40, start=200))
+    settings = Settings(
+        itad_api_key="k", stores=["Steam", "Epic", "GOG"],
+        feed_max_deals=350, feed_page_sleep=0, discovery_discount_pct=1, min_discount_pct=70,
+    )
+    deals = ITADSource(settings, sleeper=_no_sleep).fetch()
+
+    assert len(deals) == 350                      # bounded by feed_max_deals
+    assert len(responses.calls) == 2              # needed a second page
+    assert "shops=61%2C16%2C35" in responses.calls[0].request.url  # Steam,Epic,GOG ids
+
+
+@responses.activate
+def test_fetch_stops_on_short_page():
+    responses.add(responses.GET, ITAD_DEALS_URL, json=_itad_page(100, cut=60, has_more=False))
+    deals = ITADSource(_keyed(), sleeper=_no_sleep).fetch()
+    assert len(deals) == 100
+    assert len(responses.calls) == 1              # short page -> no second request
+
+
+@responses.activate
+def test_fetch_stops_when_cut_drops_below_threshold():
+    # Page 0 above threshold, page 1 below it -> stop after page 1, keep page 0.
+    responses.add(responses.GET, ITAD_DEALS_URL, json=_itad_page(200, cut=60, start=0))
+    responses.add(responses.GET, ITAD_DEALS_URL, json=_itad_page(200, cut=30, start=200))
+    settings = Settings(itad_api_key="k", min_discount_pct=70, discovery_discount_pct=50,
+                        feed_page_sleep=0)
+    deals = ITADSource(settings, sleeper=_no_sleep).fetch()
+    assert len(deals) == 200                      # page 1 entries all below 50% cut
+    assert len(responses.calls) == 2
+
+
+@responses.activate
+def test_fetch_mid_pagination_500_keeps_earlier_pages(caplog):
+    responses.add(responses.GET, ITAD_DEALS_URL, json=_itad_page(200, cut=60, start=0))
+    responses.add(responses.GET, ITAD_DEALS_URL, json={"error": "boom"}, status=500)
+    settings = Settings(itad_api_key="k", discovery_discount_pct=1, feed_page_sleep=0)
+    with caplog.at_level("WARNING", logger="src.sources.itad"):
+        deals = ITADSource(settings, sleeper=_no_sleep).fetch()
+    assert len(deals) == 200                      # first page survives the later failure
+    assert any("offset" in m for m in caplog.messages)
 
 
 @responses.activate
@@ -158,6 +252,54 @@ def test_verify_inr_drops_sub_threshold_in_inr():
 def test_verify_inr_drops_when_not_found_in_in():
     responses.add(responses.GET, ITAD_LOOKUP_URL, json={"found": False})
     assert ITADSource(_keyed()).verify_inr([_usd_deal()]) == []
+
+
+@responses.activate
+def test_verify_prefers_bulk_shop_lookup_over_title():
+    # app/111111 resolves via the bulk shop lookup, so NO per-title GET is needed.
+    responses.add(responses.POST, SHOP_LOOKUP_URL, json={"app/111111": "itad-verify-1"})
+    responses.add(responses.POST, ITAD_PRICES_URL, body=_fixture("itad_prices.json"),
+                  content_type="application/json")
+    verified = ITADSource(_keyed()).verify_inr([_usd_deal()])
+    assert len(verified) == 1
+    assert verified[0].itad_game_id == "itad-verify-1"
+    assert verified[0].store == "GOG"
+    # The title-lookup endpoint must not have been called.
+    assert all(ITAD_LOOKUP_URL not in c.request.url for c in responses.calls)
+
+
+@responses.activate
+def test_verify_batches_prices_in_hundreds():
+    n = 250
+
+    def _shop_cb(request):
+        keys = json.loads(request.body)
+        return (200, {}, json.dumps({k: f"gid-{k.split('/')[1]}" for k in keys}))
+
+    def _prices_cb(request):
+        ids = json.loads(request.body)
+        body = [
+            {"id": gid, "deals": [
+                {"shop": {"name": "Steam"}, "price": {"amount": 199.0, "currency": "INR"},
+                 "regular": {"amount": 1999.0, "currency": "INR"}, "cut": 90,
+                 "url": "https://store.steampowered.com/app/1"}]}
+            for gid in ids
+        ]
+        return (200, {}, json.dumps(body))
+
+    responses.add_callback(responses.POST, SHOP_LOOKUP_URL, callback=_shop_cb,
+                           content_type="application/json")
+    responses.add_callback(responses.POST, ITAD_PRICES_URL, callback=_prices_cb,
+                           content_type="application/json")
+
+    deals = [replace(_usd_deal(appid=1000 + i), source_game_id=str(i)) for i in range(n)]
+    verified = ITADSource(_keyed()).verify_inr(deals)
+
+    assert len(verified) == n
+    price_calls = [c for c in responses.calls if ITAD_PRICES_URL in c.request.url]
+    shop_calls = [c for c in responses.calls if SHOP_LOOKUP_URL in c.request.url]
+    assert len(price_calls) == 3   # ceil(250 / 100)
+    assert len(shop_calls) == 3    # appid lookup batched the same way
 
 
 def test_verify_without_key_drops_usd_but_keeps_freebies():

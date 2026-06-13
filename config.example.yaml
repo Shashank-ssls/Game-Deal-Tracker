@@ -8,7 +8,13 @@ min_discount_pct: 70    # Discount threshold for the deals section.
 dedup_expiry_days: 30   # Forget seen deals older than this many days.
 ratings_cache_days: 7   # Re-fetch review scores after this many days.
 wishlist_mention: ""    # e.g. "@everyone" or a role mention for wishlist hits.
-max_deals_per_run: 30   # Cap per run to respect API + Discord limits.
+max_deals_per_run: 30   # Caps enrichment / per-title price-checks ONLY (not the feed).
+
+# Store deal feeds (paginated discovery). The tracker queries the stores' own deal
+# databases page by page, so these — not max_deals_per_run — bound discovery.
+feed_max_deals: 800       # total deals ingested per source feed (50..5000)
+feed_page_sleep: 0.5      # seconds to sleep between feed pages (API courtesy; 0..5)
+publisher_metadata_batch: 100  # ITAD game ids per bulk publisher-info call
 
 # Quality / preferred-publisher settings.
 # Games whose developer OR publisher matches any name below are pulled into a pinned
@@ -31,10 +37,22 @@ min_review_pct: 0       # 0 = off. Drops discount deals below this Steam positiv
 min_metacritic: 0       # 0 = off. Drops discount deals below this Metacritic (only when a score exists).
 preferred_mention: ""   # e.g. "@everyone" or a role mention, on the Quality picks section only.
 
-# "Premium pick" badge: a pricey game now cheap. Flagged when the original price is
-# above premium_original_min AND the sale price is at or below premium_sale_max.
-premium_original_min: 1000   # original price must exceed this (INR)
-premium_sale_max: 500        # ...and sale price be at or below this (INR)
+# "Premium pick" badge: a pricey game (original above premium_original_min, INR) that
+# is now meaningfully cheaper. premium_mode chooses how "cheaper" is judged:
+#   absolute -> sale price <= premium_sale_max
+#   percent  -> discount   >= premium_min_discount_pct
+#   either   -> absolute OR percent (default; catches "now cheap" AND "big % off")
+#   both     -> absolute AND percent
+# Thresholds are amounts in `currency` (INR); deals in any other currency never qualify.
+premium_original_min: 1000      # original price must exceed this (INR)
+premium_sale_max: 500           # absolute mode: sale price at or below this (INR)
+premium_mode: either            # absolute | percent | either | both
+premium_min_discount_pct: 60    # percent/either/both mode: minimum discount %
+
+# Hide deals whose ORIGINAL (pre-discount) price is below this many INR.
+# Cleans budget/indie titles out of the feed. Free games are always exempt.
+# 0 disables the filter.
+min_original_price: 0
 
 # Trust gate: ignore the review % unless it's backed by at least this many reviews
 # (0 = off). Stops "95% from 12 reviews" passing the quality gate.
@@ -60,25 +78,11 @@ franchises: []               # e.g. ["Resident Evil", "Dark Souls", "Final Fanta
 # Re-notify a deal once when it's within this many hours of ending (0 = off).
 ending_soon_hours: 48
 
-# Best-effort: search Steam by title to attach an appid to non-Steam deals so they
-# also get ratings + publisher classification (costs extra HTTP). Off by default.
-resolve_steam_appids: false
-
-# Local Steam appid index: download Steam's games list once and cache it, so non-Steam
-# titles resolve offline/instantly (falling back to the online search on any ambiguity).
-# Speeds up resolve_steam_appids and the watchlist. Off by default.
-# Requires a free STEAM_API_KEY in .env (https://steamcommunity.com/dev/apikey); without
-# it the index is silently skipped and the online search is used.
-use_appid_index: false
-appindex_cache_days: 7       # refresh the cached app list after this many days
-
-# Auto-derive watchlist titles from your preferred_publishers' notable games (via
-# SteamSpy's most-owned list), price-checked like the manual watchlist. So setting
-# "Capcom" as preferred surfaces Resident Evil / Monster Hunter without naming them.
-# Each derived title costs one throttled Steam price-check per run — keep the cap modest.
-derive_watchlist: false
-catalogue_cache_days: 7      # refresh the derived list after this many days
-max_derived_titles: 40       # cap on auto-added titles
+# NOTE: the old keys derive_watchlist, max_derived_titles, use_appid_index,
+# resolve_steam_appids, appindex_cache_days, and catalogue_cache_days have been
+# REMOVED — discovery now comes from the live store feeds. They are still accepted
+# (and ignored, with a one-time warning) so older shared configs keep loading; do
+# not add them to new configs.
 
 # All-store historical low: flag 🔥 only when a deal is at/below the lowest price it
 # has EVER hit across all stores (ITAD), not just the one store. Adds one batched

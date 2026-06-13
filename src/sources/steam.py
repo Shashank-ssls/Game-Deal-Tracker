@@ -46,6 +46,7 @@ class SteamSource(DealSource):
                 continue
             if deal is not None:
                 deals.append(deal)
+        logger.info("steam: fetched %d deals", len(deals))
         return deals
 
     def _parse_item(self, item: dict) -> Deal | None:

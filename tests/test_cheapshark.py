@@ -25,6 +25,60 @@ def _register_stores():
                   body=_fixture("cheapshark_stores.json"), content_type="application/json")
 
 
+def _no_sleep(_seconds: float) -> None:
+    return None
+
+
+def _deals_page(n: int, savings: float, start: int = 0) -> list[dict]:
+    return [
+        {"title": f"G{start + i}", "dealID": f"D{start + i}", "storeID": "1",
+         "gameID": str(start + i), "salePrice": "4.99", "normalPrice": "19.99",
+         "savings": str(savings), "steamAppID": str(1000 + start + i)}
+        for i in range(n)
+    ]
+
+
+@responses.activate
+def test_paginates_until_total_page_count():
+    _register_stores()
+    # Two full 60-item pages; X-Total-Page-Count=2 stops after page 1.
+    responses.add(responses.GET, CHEAPSHARK_DEALS_URL, json=_deals_page(60, 80.0, start=0),
+                  headers={"X-Total-Page-Count": "2"})
+    responses.add(responses.GET, CHEAPSHARK_DEALS_URL, json=_deals_page(60, 75.0, start=60),
+                  headers={"X-Total-Page-Count": "2"})
+    settings = Settings(discovery_discount_pct=70, max_deals_per_run=500, feed_page_sleep=0)
+    deals = CheapSharkSource(settings, sleeper=_no_sleep).fetch()
+
+    assert len(deals) == 120
+    assert len(responses.calls) == 3   # 1 stores + 2 deal pages
+    # pageSize is the hard 60 cap, not max_deals_per_run.
+    assert "pageSize=60" in responses.calls[1].request.url
+
+
+@responses.activate
+def test_stops_on_empty_page():
+    _register_stores()
+    responses.add(responses.GET, CHEAPSHARK_DEALS_URL, json=_deals_page(60, 80.0),
+                  headers={"X-Total-Page-Count": "9"})
+    responses.add(responses.GET, CHEAPSHARK_DEALS_URL, json=[],
+                  headers={"X-Total-Page-Count": "9"})
+    settings = Settings(discovery_discount_pct=70, feed_page_sleep=0)
+    deals = CheapSharkSource(settings, sleeper=_no_sleep).fetch()
+    assert len(deals) == 60
+
+
+@responses.activate
+def test_storeid_filter_for_allowlist():
+    _register_stores()
+    responses.add(responses.GET, CHEAPSHARK_DEALS_URL, json=_deals_page(5, 80.0),
+                  headers={"X-Total-Page-Count": "1"})
+    settings = Settings(stores=["Steam"], discovery_discount_pct=70, feed_page_sleep=0)
+    CheapSharkSource(settings, sleeper=_no_sleep).fetch()
+    # Steam is storeID 1 in the fixture; the filter must be sent.
+    deal_call = next(c for c in responses.calls if CHEAPSHARK_DEALS_URL in c.request.url)
+    assert "storeID=1" in deal_call.request.url
+
+
 @responses.activate
 def test_filters_below_threshold_and_maps_stores():
     _register_stores()

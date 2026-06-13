@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from collections.abc import Iterable, Iterator
+from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -48,11 +48,12 @@ CREATE TABLE IF NOT EXISTS games (
 );
 
 CREATE TABLE IF NOT EXISTS runs (
-    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    started_at  TEXT NOT NULL,
-    deals_found INTEGER NOT NULL,
-    deals_new   INTEGER NOT NULL,
-    errors      TEXT
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    started_at    TEXT NOT NULL,
+    deals_found   INTEGER NOT NULL,
+    deals_new     INTEGER NOT NULL,
+    errors        TEXT,
+    source_counts TEXT          -- JSON {itad,cheapshark,steam,epic} per-source fetched counts
 );
 
 CREATE TABLE IF NOT EXISTS reminders (
@@ -60,25 +61,10 @@ CREATE TABLE IF NOT EXISTS reminders (
     reminded_at  TEXT NOT NULL
 );
 
-CREATE TABLE IF NOT EXISTS app_index (
-    appid INTEGER PRIMARY KEY,
-    norm  TEXT NOT NULL              -- normalized name for title->appid lookup
-);
-CREATE INDEX IF NOT EXISTS idx_app_norm ON app_index(norm);
-
-CREATE TABLE IF NOT EXISTS app_index_meta (
-    id         INTEGER PRIMARY KEY CHECK (id = 1),
-    fetched_at TEXT NOT NULL,
-    count      INTEGER NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS derived_watchlist (
-    title TEXT PRIMARY KEY      -- titles auto-derived from preferred publishers
-);
-CREATE TABLE IF NOT EXISTS derived_watchlist_meta (
-    id         INTEGER PRIMARY KEY CHECK (id = 1),
-    fetched_at TEXT NOT NULL,
-    count      INTEGER NOT NULL
+CREATE TABLE IF NOT EXISTS title_lookup (
+    title          TEXT PRIMARY KEY,   -- watchlist title -> resolved ITAD game id
+    itad_game_id   TEXT,
+    fetched_at     TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS price_history (
@@ -120,8 +106,19 @@ class Database:
         with self._connect() as conn:
             conn.executescript(SCHEMA)
 
+    # Tables retired by the feed-driven redesign: deals are now identified by ITAD
+    # game ids, so the local Steam app index and the SteamSpy-derived watchlist are
+    # gone. Dropped on startup if a pre-existing DB still has them.
+    _RETIRED_TABLES = (
+        "app_index",
+        "app_index_meta",
+        "derived_watchlist",
+        "derived_watchlist_meta",
+    )
+
     def _migrate(self) -> None:
         """Add columns introduced after a DB was first created (idempotent)."""
+        dropped = False
         with self._connect() as conn:
             existing = {row["name"] for row in conn.execute("PRAGMA table_info(games)")}
             for column, decl in (
@@ -132,6 +129,27 @@ class Database:
             ):
                 if column not in existing:
                     conn.execute(f"ALTER TABLE games ADD COLUMN {column} {decl}")
+            run_cols = {row["name"] for row in conn.execute("PRAGMA table_info(runs)")}
+            if "source_counts" not in run_cols:
+                conn.execute("ALTER TABLE runs ADD COLUMN source_counts TEXT")
+            tables = {
+                row["name"]
+                for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
+            }
+            for table in self._RETIRED_TABLES:
+                if table in tables:
+                    conn.execute(f"DROP TABLE {table}")
+                    dropped = True
+        if dropped:
+            self._vacuum()  # reclaim the space the (large) app index held
+
+    def _vacuum(self) -> None:
+        """Compact the database file (must run outside a transaction)."""
+        conn = sqlite3.connect(self.db_path, isolation_level=None)
+        try:
+            conn.execute("VACUUM")
+        finally:
+            conn.close()
 
     # -- dedup ---------------------------------------------------------------
 
@@ -248,77 +266,36 @@ class Database:
                 ),
             )
 
-    # -- Steam appid index ---------------------------------------------------
+    # -- watchlist title -> ITAD game id cache -------------------------------
 
-    def app_index_age_days(self) -> float | None:
-        """Age of the cached app index in days, or ``None`` if never built."""
+    def cached_title_id(self, title: str, max_age_days: int) -> tuple[bool, str | None]:
+        """Return ``(is_fresh_hit, itad_game_id)`` for a watchlist title.
+
+        A fresh hit (younger than ``max_age_days``) always carries a resolved id —
+        only successful resolutions are cached — so the watchlist can skip the ITAD
+        lookup. ``(False, None)`` means "never looked up or stale; resolve again".
+        """
         with self._connect() as conn:
             row = conn.execute(
-                "SELECT fetched_at FROM app_index_meta WHERE id = 1"
+                "SELECT itad_game_id, fetched_at FROM title_lookup WHERE title = ?", (title,)
             ).fetchone()
-        if row is None:
-            return None
+        if row is None or not row["itad_game_id"]:
+            return False, None
         fetched = datetime.fromisoformat(row["fetched_at"])
-        return (datetime.now(UTC) - fetched).total_seconds() / 86400
+        age_days = (datetime.now(UTC) - fetched).total_seconds() / 86400
+        if age_days >= max_age_days:
+            return False, None
+        return True, row["itad_game_id"]
 
-    def replace_app_index(self, pairs: Iterable[tuple[int, str]]) -> int:
-        """Atomically replace the whole appid->norm index. Returns row count."""
-        rows = [(int(appid), norm) for appid, norm in pairs if norm]
-        now = _utc_now_iso()
+    def upsert_title_id(self, title: str, itad_game_id: str) -> None:
+        """Cache a resolved watchlist title -> ITAD game id (refreshes timestamp)."""
         with self._connect() as conn:
-            conn.execute("DELETE FROM app_index")
-            conn.executemany(
-                "INSERT OR REPLACE INTO app_index (appid, norm) VALUES (?, ?)", rows
-            )
             conn.execute(
-                "INSERT INTO app_index_meta (id, fetched_at, count) VALUES (1, ?, ?) "
-                "ON CONFLICT(id) DO UPDATE SET "
-                "fetched_at = excluded.fetched_at, count = excluded.count",
-                (now, len(rows)),
+                "INSERT INTO title_lookup (title, itad_game_id, fetched_at) VALUES (?, ?, ?) "
+                "ON CONFLICT(title) DO UPDATE SET "
+                "itad_game_id = excluded.itad_game_id, fetched_at = excluded.fetched_at",
+                (title, itad_game_id, _utc_now_iso()),
             )
-        return len(rows)
-
-    def lookup_appids(self, norm: str) -> list[int]:
-        """Return all appids whose normalized name equals ``norm`` (may be empty)."""
-        with self._connect() as conn:
-            rows = conn.execute(
-                "SELECT appid FROM app_index WHERE norm = ?", (norm,)
-            ).fetchall()
-        return [int(row["appid"]) for row in rows]
-
-    # -- derived watchlist (auto from preferred publishers) ------------------
-
-    def derived_watchlist_age_days(self) -> float | None:
-        """Age of the cached derived watchlist in days, or ``None`` if never built."""
-        with self._connect() as conn:
-            row = conn.execute(
-                "SELECT fetched_at FROM derived_watchlist_meta WHERE id = 1"
-            ).fetchone()
-        if row is None:
-            return None
-        fetched = datetime.fromisoformat(row["fetched_at"])
-        return (datetime.now(UTC) - fetched).total_seconds() / 86400
-
-    def replace_derived_watchlist(self, titles: Iterable[str]) -> int:
-        """Atomically replace the cached derived watchlist. Returns row count."""
-        rows = [(t,) for t in dict.fromkeys(t.strip() for t in titles if t.strip())]
-        now = _utc_now_iso()
-        with self._connect() as conn:
-            conn.execute("DELETE FROM derived_watchlist")
-            conn.executemany("INSERT OR IGNORE INTO derived_watchlist (title) VALUES (?)", rows)
-            conn.execute(
-                "INSERT INTO derived_watchlist_meta (id, fetched_at, count) VALUES (1, ?, ?) "
-                "ON CONFLICT(id) DO UPDATE SET "
-                "fetched_at = excluded.fetched_at, count = excluded.count",
-                (now, len(rows)),
-            )
-        return len(rows)
-
-    def get_derived_watchlist(self) -> list[str]:
-        """Return cached derived watchlist titles (may be empty)."""
-        with self._connect() as conn:
-            rows = conn.execute("SELECT title FROM derived_watchlist").fetchall()
-        return [row["title"] for row in rows]
 
     # -- price history (price-trend / "cheaper than before") -----------------
 
@@ -378,13 +355,20 @@ class Database:
         deals_found: int,
         deals_new: int,
         errors: list[str] | None = None,
+        source_counts: dict[str, int] | None = None,
     ) -> int:
         """Append a run record; returns the new run id."""
         with self._connect() as conn:
             cur = conn.execute(
-                "INSERT INTO runs (started_at, deals_found, deals_new, errors) "
-                "VALUES (?, ?, ?, ?)",
-                (_utc_now_iso(), deals_found, deals_new, json.dumps(errors or [])),
+                "INSERT INTO runs (started_at, deals_found, deals_new, errors, source_counts) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (
+                    _utc_now_iso(),
+                    deals_found,
+                    deals_new,
+                    json.dumps(errors or []),
+                    json.dumps(source_counts) if source_counts else None,
+                ),
             )
             return int(cur.lastrowid or 0)
 
@@ -392,7 +376,7 @@ class Database:
         """Return the most recent run records (newest first)."""
         with self._connect() as conn:
             rows = conn.execute(
-                "SELECT id, started_at, deals_found, deals_new, errors "
+                "SELECT id, started_at, deals_found, deals_new, errors, source_counts "
                 "FROM runs ORDER BY id DESC LIMIT ?",
                 (limit,),
             ).fetchall()

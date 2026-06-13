@@ -46,6 +46,7 @@ class EpicSource(DealSource):
                 continue
             if deal is not None:
                 deals.append(deal)
+        logger.info("epic: fetched %d deals", len(deals))
         return deals
 
     def _parse_element(self, element: dict) -> Deal | None:
